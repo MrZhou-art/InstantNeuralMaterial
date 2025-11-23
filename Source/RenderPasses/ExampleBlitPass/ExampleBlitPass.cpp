@@ -32,35 +32,63 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
     registry.registerClass<RenderPass, ExampleBlitPass>();
 }
 
-ExampleBlitPass::ExampleBlitPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {}
+ExampleBlitPass::ExampleBlitPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
+{
+    RasterizerState::Desc wireframeDesc;
+    wireframeDesc.setFillMode(RasterizerState::FillMode::Wireframe);
+    wireframeDesc.setCullMode(RasterizerState::CullMode::None);
+    mpRasterState = RasterizerState::create(wireframeDesc);
+
+    mpGraphicsState = GraphicsState::create(mpDevice);
+
+    mpFbo = Fbo::create(mpDevice);
+}
 
 Properties ExampleBlitPass::getProperties() const
 {
     return {};
-}
+}  
 
 RenderPassReflection ExampleBlitPass::reflect(const CompileData& compileData)
 {
     // Define the required resources here
     RenderPassReflection reflector;
-    reflector.addInput("input", "the source texture");
-    reflector.addOutput("output", "the destination texture");
+    reflector.addOutput("output", "Wireframe view texture");
     return reflector;
 }
 
 void ExampleBlitPass::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    const auto& pSrcTex = renderData.getTexture("input");
-    const auto& pDstTex = renderData.getTexture("output");
+    auto pTex = renderData.getTexture("output");
+    mpFbo->attachColorTarget(pTex, uint32_t(0));
+    const float4 clearColor(0, 0, 0, 1);
+    pRenderContext->clearFbo(mpFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::All);
+    mpGraphicsState->setFbo(mpFbo);
 
-    if (pSrcTex && pDstTex)
+    if (mpScene)
     {
-        pRenderContext->blit(pSrcTex->getSRV(), pDstTex->getRTV());
-    }
-    else
-    {
-        logWarning("ExampleBlitPass::execute() - missing an input or output resource");
+        mpVars->getRootVar()["PerFrameCB"]["gColor"] = float4(0, 1, 0, 1);
+        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
     }
 }
 
 void ExampleBlitPass::renderUI(Gui::Widgets& widget) {}
+
+void ExampleBlitPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
+{
+    mpScene = pScene;
+
+    if (mpScene != nullptr)
+    {
+        // Create wireframe program
+        ProgramDesc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderFile).vsEntry("vsMain").psEntry("psMain");
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        mpProgram = Program::create(mpDevice, desc, mpScene->getSceneDefines());
+        mpGraphicsState->setProgram(mpProgram);
+
+        mpVars = ProgramVars::create(mpDevice, mpProgram.get());
+    }
+}
